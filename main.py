@@ -44,42 +44,78 @@ class Camera:
                   self.o[2] + n * self.move_l * math.sin(self.omega))
 
     def point_screen_proportion(self, point):
-        # atan angle tangent if point is to the right (on X axis) from the A else it is atan + pi
-        try:
-            tg_amx_angle = (self.a[1] - point[1]) / (self.a[0] - point[0])
-            cos_amx_angle = (self.a[0] - point[0]) / math.sqrt((self.a[1] - point[1]) ** 2 +
-                                                               (self.a[0] - point[0]) ** 2)
-            atan_ang = math.atan(tg_amx_angle)
-            amx_angle = atan_ang - (0 if cos_amx_angle >= 0 else math.pi * abs(atan_ang) / atan_ang)
-        except ZeroDivisionError:
-            amx_angle = -math.pi / 2 if point[1] >= self.a[1] else math.pi / 2
+        a_mao = (math.cos(self.omega) * math.cos(self.alpha) * (self.a[0] - point[0]) +
+                 math.cos(self.omega) * math.sin(self.alpha) * (self.a[1] - point[1]) +
+                 math.sin(self.omega) * (self.a[2] - point[2]))
 
-        fov_hor_xy = math.pi if self.fov_hor == math.pi \
-            else 2 * math.atan(math.tan(self.fov_hor / 2) / math.cos(self.omega))
+        mao = (self.a[0] - a_mao * math.cos(self.alpha) * math.cos(self.omega),
+               self.a[1] - a_mao * math.sin(self.alpha) * math.cos(self.omega),
+               self.a[2] - a_mao * math.sin(self.omega))
 
-        # if tan of point_a_Xaxis angle is between camera borders angles with Xaxis
-        # then we return proportion of M on this camera screen else return -1
-        if not -fov_hor_xy / 2 < amx_angle - self.alpha < fov_hor_xy / 2:
-            return -1,
+        # possibly error
+        mao_m_alpha = math.sin(self.alpha) * (point[0] - mao[0]) - math.cos(self.alpha) * (point[1] - mao[1])
+        m_alpha = (mao[0] + math.sin(self.alpha) * mao_m_alpha,
+                   mao[1] - math.cos(self.alpha) * mao_m_alpha,
+                   mao[2])
 
-        # if tangent of point-A-AO_xy_projection exists then we find atan and use it as is if
-        try:
-            amxl_angle = math.atan((self.a[2] - point[2]) /
-                                   (math.sqrt((point[0] - self.a[0]) ** 2 +
-                                              (point[1] - self.a[1]) ** 2)
-                                    * math.cos(amx_angle - self.alpha)))
-        except ZeroDivisionError:
-            amxl_angle = -math.pi if point[2] >= self.a[2] else math.pi
+        m_omega = (mao[0] + point[0] - m_alpha[0],
+                   mao[1] + point[1] - m_alpha[1],
+                   point[2])
 
-        # same for vertical camera surface (now it is AO "axis" instead of X axis
-        if not -self.fov_ver / 2 < amxl_angle - self.omega < self.fov_ver / 2:
-            return -1,
+        # amx angle
+        am = distance_between_points((self.a[0], self.a[1], 0), (point[0], point[1], 0))
+        amx_angle = 0 if am == 0 else (math.acos((self.a[0] - point[0]) / am) * (-1 if point[1] > self.a[1] else 1))
 
-        x_prop = 0.5 - math.tan(amx_angle - self.alpha) / (2 * math.tan(fov_hor_xy / 2))
-        y_prop = 0.5 - math.tan(amxl_angle - self.omega) / (2 * math.tan(self.fov_ver / 2))
-        x_prop = 0.5 - math.sin(amx_angle - self.alpha) / (2 * math.sin(fov_hor_xy / 2))
-        y_prop = 0.5 - math.sin(amxl_angle - self.omega) / (2 * math.sin(self.fov_ver / 2))
-        return x_prop, y_prop
+        # am_omega_xy angle
+        am_omega = distance_between_points(self.a, m_omega)
+        amxy_angle = 0 if am_omega == 0 else math.acos(math.sqrt((self.a[0] - m_omega[0]) ** 2 + (self.a[1] - m_omega[1]) ** 2) /
+                                                       am_omega)
+
+        prop_x = 0.5 + distance_between_points(mao, m_alpha) / \
+                 (distance_between_points(self.a, mao) * math.tan(self.fov_hor / 2)) * \
+                 (-1 if amx_angle > self.alpha else 1)
+        prop_y = 0.5 + distance_between_points(mao, m_omega) / \
+                 (distance_between_points(self.a, mao) * math.tan(self.fov_ver / 2)) * (
+                     1 if (amxy_angle > self.omega >= 0 or (self.omega < 0 and amxy_angle < abs(self.omega))) else -1)
+        return prop_x, prop_y
+
+
+class Sequance:
+    def __init__(self, points, color, cons=()):
+        self.cons = cons
+        self.points = points
+        self.props = list()
+        self.color = color
+
+    def get_coords(self, camera):
+        self.props.clear()
+        for i in self.points:
+            if i[0] != -1:
+                self.props.append(camera.point_screen_proportion(i))
+
+    def draw(self, screen):
+        for i in self.props:
+            pygame.draw.circle(screen, self.color, (screen.get_width() * i[0], screen.get_height() * i[1]), 5)
+        for i in range(len(self.cons) - 1):
+            try:
+                pygame.draw.line(screen, self.color,
+                                 (screen.get_width() * self.props[self.cons[i]][0], screen.get_height() * self.props[self.cons[i]][1]),
+                                 (screen.get_width() * self.props[self.cons[i + 1]][0], screen.get_height() * self.props[self.cons[i + 1]][1]))
+            except IndexError:
+                pass
+
+    def update(self):
+        for i in range(len(self.points)):
+            self.points[i] = (self.points[i][0], self.points[i][1], self.points[i][2] )
+
+
+def distance_between_points(point1, point2):
+    if isinstance(point1, tuple) and isinstance(point2, tuple):
+        return math.sqrt((point1[0] - point2[0]) ** 2 +
+                         (point1[1] - point2[1]) ** 2 +
+                         (point1[2] - point2[2]) ** 2)
+    else:
+        return 'not tuples'
 
 
 if __name__ == "__main__":
@@ -91,12 +127,15 @@ if __name__ == "__main__":
     focal_l = 1
     cam_size = (i * 0.02 for i in size)
     fov_hor, fov_ver = (math.atan(i / 2 / focal_l) * 2 for i in cam_size)
-    camera = Camera((0, 0, 0), 16, math.pi / 2, math.pi / 3, 1, 1000)
+    camera = Camera((0, 0, 0), 16, math.pi / 6, math.pi / 6, 1, 1000)
 
     alpha_add, omega_add = 0.005, 0.005
 
-    points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0), (0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)] #
-    points_sc = []
+    seq = Sequance([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0), (0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)], 'red',
+                   cons=(0, 1, 2, 3, 0, 4, 5, 6, 7, 4, 5, 1, 2, 6, 7, 3))
+    seq2 = Sequance([(0, 0, 0), (1, 0, 0), (2, 0, 0), (3, 0, 0),
+                     (0, 1, 0), (0, 2, 0), (0, 3, 0),
+                     (0, 0, 1), (0, 0, 2), (0, 0, 3)], 'blue')
 
     x_hold_start, y_hold_start = -1, -1
 
@@ -130,33 +169,10 @@ if __name__ == "__main__":
                 camera.ao_length += -event.y * camera.move_l
                 camera.a_solve()
 
-        points_sc = []
-        for point in points:
-            prop = camera.point_screen_proportion(point)
-            if prop[0] != -1:
-                x, y = size[0] * prop[0], size[1] * (1 - prop[1])
-                points_sc.append((x, y))
-                pygame.draw.circle(screen, 'red' if point != (0, 0, 0) else 'blue', (x, y), 10)
-            else:
-                print(point)
-        # cube lines
-        try:
-            if True:
-                for i in [(points_sc[0], points_sc[1]),
-                          (points_sc[1], points_sc[2]),
-                          (points_sc[2], points_sc[3]),
-                          (points_sc[3], points_sc[0]),
-                          (points_sc[0], points_sc[4]),
-                          (points_sc[1], points_sc[5]),
-                          (points_sc[2], points_sc[6]),
-                          (points_sc[3], points_sc[7]),
-                          (points_sc[4], points_sc[5]),
-                          (points_sc[5], points_sc[6]),
-                          (points_sc[6], points_sc[7]),
-                          (points_sc[7], points_sc[4])]:
-                    pygame.draw.line(screen, 'red', i[0], i[1], width=1)
-        except IndexError:
-            pass
+        seq.get_coords(camera)
+        seq2.get_coords(camera)
+        seq.draw(screen)
+        seq2.draw(screen)
+        seq.update()
 
-        print(camera.o, camera.a, camera.alpha, camera.omega)
         pygame.display.flip()
